@@ -1,22 +1,8 @@
-use std::cell::RefCell;
 use std::env;
 use std::path::Path;
-use std::rc::Rc;
 
 use rustboyadvance_core::prelude::*;
-use rustboyadvance_core::util::FpsCounter;
-
-struct BenchmarkHardware {}
-
-impl BenchmarkHardware {
-    fn new() -> BenchmarkHardware {
-        BenchmarkHardware {}
-    }
-}
-
-impl VideoInterface for BenchmarkHardware {}
-impl AudioInterface for BenchmarkHardware {}
-impl InputInterface for BenchmarkHardware {}
+use rustboyadvance_utils::FpsCounter;
 
 fn main() {
     if env::args().count() < 3 {
@@ -37,15 +23,7 @@ fn main() {
         .build()
         .unwrap();
 
-    let dummy = Rc::new(RefCell::new(BenchmarkHardware::new()));
-
-    let mut gba = GameBoyAdvance::new(
-        bios.into_boxed_slice(),
-        gamepak,
-        dummy.clone(),
-        dummy.clone(),
-        dummy.clone(),
-    );
+    let mut gba = GameBoyAdvance::new(bios.into_boxed_slice(), gamepak, NullAudio::new());
     gba.skip_bios();
 
     let mut fps_counter = FpsCounter::default();

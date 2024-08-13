@@ -12,12 +12,13 @@ Nintendo GameBoy Advance ™ emulator and debugger, written in rust.
 WebAssembly Demo: https://michelhe.github.io/rustboyadvance-ng/ ![Deploy](https://github.com/michelhe/rustboyadvance-ng/workflows/Deploy/badge.svg?branch=master)
 
 # Project Structure
-* `core/` - Main emulator crate
-* `bindings/` - Bindings to other languages. Currently only java binidings through JNI.
+* `core/` - Main emulator crate that ties everything together 
+* `arm7tdmi/` - Emulation of the Arm7tdmi processor.
 * `platform/` - Constains executables & application built with `rustboyadvance-core`
     * `platform/rustbodyadvance-wasm` - Web emulator powered by WebAssembly
     * `platform/rustbodyadvance-sdl2` - Desktop application built with sdl2
     * `platform/rustbodyadvance-minifb` - Desktop application built with minifb, *not maintained*.
+    * `platform/rustbodyadvance-jni` - Java JNI binidngs for the emulator.
     * `platform/android` - A PoC Android application.
 
 # Progress
@@ -41,6 +42,14 @@ sudo apt-get -y install libsdl2-dev libsdl2-image-dev
 ## Windows build dependencies
 SDL2 runtime binaries are included in this repository, no extra setup needed.
 
+## macOS
+
+Install SDL2 dependencies
+```bash
+brew install SDL2 SDL2_image
+export LIBRARY_PATH="$LIBRARY_PATH:/opt/homebrew/lib"
+```
+
 ## Build & Usage
 You need to obtain a gba bios binary.
 An [open source GBA bios](https://github.com/Nebuleon/ReGBA/blob/master/bios/gba_bios.bin) is also available and supported.
@@ -51,7 +60,7 @@ Place the bios file in the repository root and name it `gba_bios.bin` (or altern
 
 Build and run in release mode (performance is terrible in the `dev` profile)
 ```bash
-$ cargo run --release -p rustboyadvance-sdl2 -- path/to/rom
+$ cargo run --release -- path/to/rom
 ```
 
 

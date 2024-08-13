@@ -5,6 +5,8 @@ authors = ["Michel Heily <michelheily@gmail.com>"]
 edition = "2018"
 
 [dependencies]
+arm7tdmi = { path = '../arm7tdmi' }
+rustboyadvance-utils = { path = "../utils" }
 cfg-if = "1.0.0"
 serde = { version = "1.0.104", features = ["derive", "rc"] }
 bincode = "1.2.1"
@@ -34,20 +36,13 @@ sha2 = "0.8.1"
 hex-literal = "0.2.1"
 rustyline = { version = "6.0.0", optional = true }
 nom = { version = "5.0.0", optional = true }
-gdbstub = { version = "0.1.2", optional = true, features = ["std"] }
-ringbuf = "0.2.2"
-goblin = { version = "0.2", optional = true }
 fuzzy-matcher = { version = "0.3.4", optional = true }
 bit_reverse = "0.1.8"
 yaml-rust = "0.4"
 lazy_static = "1.4.0"
 smart-default = "0.6.0"
-
-[target.'cfg(target_arch="wasm32")'.dependencies]
-instant = { version = "0.1.2", features = ["wasm-bindgen"] }
-
-[build-dependencies]
-bit = "^0.1"
+crossbeam = "0.8.2"
+xml-builder = "0.5.0"
 
 [dev-dependencies]
 criterion = "0.3"
@@ -58,8 +53,5 @@ harness = false
 
 [features]
 default = []
-elf_support = ["goblin"]
+elf_support = []
 debugger = ["nom", "rustyline", "fuzzy-matcher", "elf_support"]
-gdb = ["gdbstub"]
-# For use for ports where VideoInterface is not needed like wasm & jni
-no_video_interface = []

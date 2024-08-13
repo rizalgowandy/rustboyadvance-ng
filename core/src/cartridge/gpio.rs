@@ -4,7 +4,7 @@ use super::{GPIO_PORT_CONTROL, GPIO_PORT_DATA, GPIO_PORT_DIRECTION};
 use bit::BitIndex;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq)]
 pub enum GpioDirection {
     /// GPIO to GBA
     In = 0,
@@ -27,7 +27,7 @@ pub trait GpioDevice: Sized {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Gpio {
-    pub(in crate) rtc: Option<Rtc>,
+    pub(crate) rtc: Option<Rtc>,
     direction: GpioState,
     control: GpioPortControl,
 }

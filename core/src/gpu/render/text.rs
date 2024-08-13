@@ -4,8 +4,9 @@ use super::super::consts::*;
 use super::super::Rgb15;
 use super::super::{Gpu, PixelFormat, SCREEN_BLOCK_SIZE};
 use super::{utils, ViewPort};
+use crate::prelude::BusIO;
 
-use crate::Bus;
+use rustboyadvance_utils::index2d;
 
 impl Gpu {
     pub(in super::super) fn render_reg_bg(&mut self, bg: usize) {
@@ -78,7 +79,7 @@ impl Gpu {
                     }
                     se_row = 0;
                     if bg_width == 512 {
-                        sbb = sbb ^ 1;
+                        sbb ^= 1;
                     }
                 }
             };

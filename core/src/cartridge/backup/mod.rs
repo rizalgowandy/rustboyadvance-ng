@@ -1,12 +1,12 @@
-use std::convert::TryFrom;
 use std::fmt;
+use std::str::FromStr;
 
 mod backup_file;
 pub use backup_file::BackupFile;
 pub mod eeprom;
 pub mod flash;
 
-#[derive(Debug, Primitive, Serialize, Deserialize, Copy, Clone, PartialEq)]
+#[derive(Debug, Primitive, Serialize, Deserialize, Copy, Clone, PartialEq, Eq)]
 pub enum BackupType {
     Eeprom = 0,
     Sram = 1,
@@ -16,10 +16,9 @@ pub enum BackupType {
     AutoDetect = 5,
 }
 
-impl TryFrom<&str> for BackupType {
-    type Error = String;
-
-    fn try_from(s: &str) -> Result<Self, Self::Error> {
+impl FromStr for BackupType {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         use BackupType::*;
         match s {
             "autodetect" => Ok(AutoDetect),

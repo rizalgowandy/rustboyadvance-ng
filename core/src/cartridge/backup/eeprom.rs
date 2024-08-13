@@ -35,9 +35,9 @@ impl EepromType {
     }
 }
 
-impl Into<usize> for EepromAddressBits {
-    fn into(self) -> usize {
-        match self {
+impl From<EepromAddressBits> for usize {
+    fn from(bits: EepromAddressBits) -> usize {
+        match bits {
             EepromAddressBits::Eeprom6bit => 6,
             EepromAddressBits::Eeprom14bit => 14,
         }
@@ -95,7 +95,7 @@ impl EepromChip {
     fn new(eeprom_type: EepromType, mut memory: BackupFile) -> EepromChip {
         memory.resize(eeprom_type.size());
         EepromChip {
-            memory: memory,
+            memory,
             addr_bits: eeprom_type.bits(),
 
             state: SpiState::RxInstruction,
@@ -130,7 +130,7 @@ impl EepromChip {
     fn fill_tx_buffer(&mut self) {
         let mut tx_buffer = 0u64;
         for i in 0..8 {
-            tx_buffer = tx_buffer << 8;
+            tx_buffer <<= 8;
             tx_buffer |= self.memory.read(self.address + i) as u64;
         }
         self.tx_buffer = tx_buffer;
@@ -152,10 +152,9 @@ impl EepromChip {
             RxInstruction => {
                 // If instruction was recvd, proceed to recv the address
                 if self.rx_count >= 2 {
-                    let insn = SpiInstruction::from_u64(self.rx_buffer).expect(&format!(
-                        "invalid spi command {:#010b}",
-                        self.rx_buffer as u8
-                    ));
+                    let insn = SpiInstruction::from_u64(self.rx_buffer).unwrap_or_else(|| {
+                        panic!("invalid spi command {:#010b}", self.rx_buffer as u8)
+                    });
                     next_state = Some(RxAddress(insn));
                     self.reset_rx_buffer();
                 }
@@ -193,7 +192,7 @@ impl EepromChip {
                     for i in 0..8 {
                         self.memory
                             .write(self.address + (7 - i), (data & 0xff) as u8);
-                        data = data >> 8;
+                        data >>= 8;
                     }
                     next_state = Some(StopBit(Write));
                     self.reset_rx_buffer();
@@ -254,7 +253,7 @@ impl EepromChip {
         result
     }
 
-    pub(in crate) fn is_transmitting(&self) -> bool {
+    pub(crate) fn is_transmitting(&self) -> bool {
         use SpiState::*;
         match self.state {
             TxData | TxDummy => true,
@@ -262,7 +261,7 @@ impl EepromChip {
         }
     }
 
-    pub(in crate) fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
         self.state = SpiState::RxInstruction;
         self.reset_rx_buffer();
         self.reset_tx_buffer();
@@ -280,7 +279,7 @@ impl EepromChip {
 /// Eeprom controller can programmed with DMA accesses in 16bit mode
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct EepromController {
-    pub(in crate) chip: RefCell<EepromChip>,
+    pub(crate) chip: RefCell<EepromChip>,
     detect: bool,
 }
 
@@ -445,7 +444,7 @@ mod tests {
             let mut byte = value[i];
             for j in 0..8 {
                 let bit = byte >> 7;
-                byte = byte << 1;
+                byte <<= 1;
                 bit_stream[8 + i * 8 + j] = bit as u16;
             }
         }
@@ -464,11 +463,11 @@ mod tests {
         {
             let mut chip = spi.chip.borrow_mut();
             let bytes = chip.memory.bytes_mut();
-            bytes[16] = 'T' as u8;
-            bytes[17] = 'E' as u8;
-            bytes[18] = 'S' as u8;
-            bytes[19] = 'T' as u8;
-            bytes[20] = '!' as u8;
+            bytes[16] = b'T';
+            bytes[17] = b'E';
+            bytes[18] = b'S';
+            bytes[19] = b'T';
+            bytes[20] = b'!';
             drop(bytes);
             chip.memory.flush();
         }

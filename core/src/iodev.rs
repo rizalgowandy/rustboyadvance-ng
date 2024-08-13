@@ -1,6 +1,7 @@
 use std::cmp;
 
-use super::bus::*;
+use arm7tdmi::memory::{Addr, BusIO, DebugRead};
+
 use super::dma::DmaController;
 use super::gpu::regs::GpuMemoryMappedIO;
 use super::gpu::regs::WindowFlags;
@@ -8,7 +9,7 @@ use super::gpu::*;
 use super::interrupt::{InterruptConnect, InterruptController, SharedInterruptFlags};
 use super::keypad;
 use super::mgba_debug::DebugPort;
-use super::sched::{SchedulerConnect, SharedScheduler};
+use super::sched::{Scheduler, SchedulerConnect, SharedScheduler};
 use super::sound::SoundController;
 use super::sysbus::SysBusPtr;
 use super::timer::Timers;
@@ -17,11 +18,11 @@ use serde::{Deserialize, Serialize};
 
 use self::consts::*;
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HaltState {
     Running,
     Halt, // In Halt mode, the CPU is paused as long as (IE AND IF)=0,
-    Stop, // In Stop mode, most of the hardware including sound and video are paused
+          // Stop, // In Stop mode, most of the hardware including sound and video are paused TODO: handle
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -40,6 +41,9 @@ pub struct IoDevices {
     // HACK
     // my ownership design sucks
     #[serde(skip)]
+    #[serde(default = "Scheduler::new_shared")]
+    scheduler: SharedScheduler,
+    #[serde(skip)]
     #[serde(default = "SysBusPtr::default")]
     sysbus_ptr: SysBusPtr,
 }
@@ -51,6 +55,7 @@ impl IoDevices {
         dmac: DmaController,
         timers: Timers,
         sound_controller: Box<SoundController>,
+        scheduler: SharedScheduler,
     ) -> IoDevices {
         IoDevices {
             intc,
@@ -63,7 +68,7 @@ impl IoDevices {
             keyinput: keypad::KEYINPUT_ALL_RELEASED,
             waitcnt: WaitControl(0),
             debug: DebugPort::new(),
-
+            scheduler,
             sysbus_ptr: Default::default(),
         }
     }
@@ -78,20 +83,17 @@ impl InterruptConnect for IoDevices {
         self.intc.connect_irq(interrupt_flags.clone());
         self.gpu.connect_irq(interrupt_flags.clone());
         self.dmac.connect_irq(interrupt_flags.clone());
-        self.timers.connect_irq(interrupt_flags.clone());
+        self.timers.connect_irq(interrupt_flags);
     }
 }
 
 impl SchedulerConnect for IoDevices {
     fn connect_scheduler(&mut self, scheduler: SharedScheduler) {
-        self.gpu.connect_scheduler(scheduler.clone());
-        self.sound.connect_scheduler(scheduler.clone());
-        self.dmac.connect_scheduler(scheduler.clone());
-        self.timers.connect_scheduler(scheduler.clone());
+        self.scheduler = scheduler;
     }
 }
 
-impl Bus for IoDevices {
+impl BusIO for IoDevices {
     fn read_16(&mut self, addr: Addr) -> u16 {
         let io = self;
         let io_addr = addr + IO_BASE;
@@ -124,7 +126,7 @@ impl Bus for IoDevices {
             REG_IE => io.intc.interrupt_enable.0 as u16,
             REG_IF => io.intc.interrupt_flags.get().value() as u16,
 
-            REG_TM0CNT_L..=REG_TM3CNT_H => io.timers.handle_read(io_addr),
+            REG_TM0CNT_L..=REG_TM3CNT_H => io.timers.handle_read(io_addr, &io.scheduler),
 
             SOUND_BASE..=SOUND_END => io.sound.handle_read(io_addr),
             REG_DMA0CNT_H => io.dmac.channels[0].ctrl.0,
@@ -143,7 +145,7 @@ impl Bus for IoDevices {
 
             REG_POSTFLG => io.post_boot_flag as u16,
             REG_HALTCNT => 0,
-            REG_KEYINPUT => io.keyinput as u16,
+            REG_KEYINPUT => io.keyinput,
 
             x if DebugPort::is_debug_access(x) => io.debug.read(io_addr),
 
@@ -263,7 +265,9 @@ impl Bus for IoDevices {
             REG_IE => io.intc.interrupt_enable.0 = value,
             REG_IF => io.intc.clear(value),
 
-            REG_TM0CNT_L..=REG_TM3CNT_H => io.timers.handle_write(io_addr, value),
+            REG_TM0CNT_L..=REG_TM3CNT_H => {
+                io.timers.handle_write(io_addr, value, &mut io.scheduler)
+            }
 
             SOUND_BASE..=SOUND_END => {
                 io.sound.handle_write(io_addr, value);
@@ -272,7 +276,8 @@ impl Bus for IoDevices {
             DMA_BASE..=REG_DMA3CNT_H => {
                 let ofs = io_addr - DMA_BASE;
                 let channel_id = (ofs / 12) as usize;
-                io.dmac.write_16(channel_id, ofs % 12, value)
+                io.dmac
+                    .write_16(channel_id, ofs % 12, value, &mut io.scheduler)
             }
 
             REG_WAITCNT => {
@@ -283,7 +288,7 @@ impl Bus for IoDevices {
             REG_POSTFLG => io.post_boot_flag = value != 0,
             REG_HALTCNT => {
                 if value & 0x80 != 0 {
-                    io.haltcnt = HaltState::Stop;
+                    // io.haltcnt = HaltState::Stop;
                     panic!("Can't handle HaltCtrl == Stop yet");
                 } else {
                     io.haltcnt = HaltState::Halt;
@@ -332,7 +337,7 @@ impl DebugRead for IoDevices {
 }
 
 bitfield! {
-    #[derive(Serialize, Deserialize, Default, Copy, Clone, PartialEq)]
+    #[derive(Serialize, Deserialize, Default, Copy, Clone, PartialEq, Eq)]
     pub struct WaitControl(u16);
     impl Debug;
     u16;

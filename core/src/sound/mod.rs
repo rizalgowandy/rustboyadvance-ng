@@ -1,6 +1,3 @@
-use std::cell::RefCell;
-use std::rc::Rc;
-
 use bit::BitIndex;
 use serde::{Deserialize, Serialize};
 
@@ -8,10 +5,10 @@ use super::dma::DmaController;
 use super::iodev::consts::*;
 use super::sched::*;
 
-use crate::{AudioInterface, StereoSample};
-
 mod fifo;
 use fifo::SoundFifo;
+pub mod interface;
+pub use interface::{AudioInterface, DynAudioInterface, StereoSample};
 
 mod dsp;
 use dsp::{CosineResampler, Resampler};
@@ -59,14 +56,8 @@ const REG_FIFO_A_H: u32 = REG_FIFO_A + 2;
 const REG_FIFO_B_L: u32 = REG_FIFO_B;
 const REG_FIFO_B_H: u32 = REG_FIFO_B + 2;
 
-type AudioDeviceRcRefCell = Rc<RefCell<dyn AudioInterface>>;
-
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SoundController {
-    #[serde(skip)]
-    #[serde(default = "Scheduler::new_shared")]
-    scheduler: SharedScheduler,
-
     cycles: usize, // cycles count when we last provided a new sample.
 
     mse: bool,
@@ -105,19 +96,12 @@ pub struct SoundController {
     output_buffer: Vec<StereoSample<f32>>,
 }
 
-impl SchedulerConnect for SoundController {
-    fn connect_scheduler(&mut self, scheduler: SharedScheduler) {
-        self.scheduler = scheduler;
-    }
-}
-
 impl SoundController {
-    pub fn new(mut scheduler: SharedScheduler, audio_device_sample_rate: f32) -> SoundController {
+    pub fn new(sched: &mut Scheduler, audio_device_sample_rate: f32) -> SoundController {
         let resampler = CosineResampler::new(32768_f32, audio_device_sample_rate);
         let cycles_per_sample = 512;
-        scheduler.push(EventType::Apu(ApuEvent::Sample), cycles_per_sample);
+        sched.schedule((EventType::Apu(ApuEvent::Sample), cycles_per_sample));
         SoundController {
-            scheduler,
             cycles_per_sample,
             cycles: 0,
             mse: false,
@@ -144,7 +128,7 @@ impl SoundController {
             sample_rate: 32_768f32,
             dma_sound: [Default::default(), Default::default()],
 
-            resampler: resampler,
+            resampler,
             output_buffer: Vec::with_capacity(1024),
         }
     }
@@ -207,11 +191,9 @@ impl SoundController {
                     info!("MSE enabled!");
                     self.mse = true;
                 }
-            } else {
-                if self.mse {
-                    info!("MSE disabled!");
-                    self.mse = false;
-                }
+            } else if self.mse {
+                info!("MSE disabled!");
+                self.mse = false;
             }
 
             // other fields of this register are read-only anyway, ignore them.
@@ -320,24 +302,24 @@ impl SoundController {
             return;
         }
 
-        const FIFO_INDEX_TO_REG: [u32; 2] = [REG_FIFO_A, REG_FIFO_B];
-        for fifo in 0..2 {
+        static FIFO_INDEX_TO_REG: [u32; 2] = [REG_FIFO_A, REG_FIFO_B];
+        for (fifo, reg) in FIFO_INDEX_TO_REG.iter().enumerate() {
             let dma = &mut self.dma_sound[fifo];
 
             if timer_id == dma.timer_select {
                 dma.value = dma.fifo.read();
                 if dma.fifo.count() <= 16 {
-                    dmac.notify_sound_fifo(FIFO_INDEX_TO_REG[fifo]);
+                    dmac.notify_sound_fifo(*reg);
                 }
             }
         }
     }
 
     #[inline]
-    fn on_sample(&mut self, extra_cycles: usize, audio_device: &AudioDeviceRcRefCell) {
-        let mut sample = [0f32; 2];
+    fn on_sample(&mut self, audio_device: &mut DynAudioInterface) -> FutureEvent {
+        let mut sample = [0f32, 0f32];
 
-        for channel in 0..=1 {
+        for (channel, out_sample) in sample.iter_mut().enumerate() {
             let mut dma_sample = 0;
             for dma in &mut self.dma_sound {
                 if dma.is_stereo_channel_enabled(channel) {
@@ -347,33 +329,28 @@ impl SoundController {
             }
 
             apply_bias(&mut dma_sample, self.sound_bias.bit_range(0..10) as i16);
-            sample[channel] = dma_sample as i32 as f32;
+            *out_sample = dma_sample as i32 as f32;
         }
 
-        let stereo_sample = (sample[0], sample[1]);
-        self.resampler.feed(stereo_sample, &mut self.output_buffer);
+        self.resampler.feed(&sample, &mut self.output_buffer);
 
-        let mut audio = audio_device.borrow_mut();
-        self.output_buffer.drain(..).for_each(|(left, right)| {
-            audio.push_sample(&[
+        self.output_buffer.drain(..).for_each(|[left, right]| {
+            audio_device.push_sample(&[
                 (left.round() as i16) * (std::i16::MAX / 512),
                 (right.round() as i16) * (std::i16::MAX / 512),
             ]);
         });
-
-        self.scheduler
-            .push_apu_event(ApuEvent::Sample, self.cycles_per_sample - extra_cycles);
+        (EventType::Apu(ApuEvent::Sample), self.cycles_per_sample)
     }
 
     pub fn on_event(
         &mut self,
         event: ApuEvent,
-        extra_cycles: usize,
-        audio_device: &AudioDeviceRcRefCell,
-    ) {
+        audio_device: &mut DynAudioInterface,
+    ) -> FutureEvent {
         match event {
-            ApuEvent::Sample => self.on_sample(extra_cycles, audio_device),
-            _ => debug!("got {:?} event", event),
+            ApuEvent::Sample => self.on_sample(audio_device),
+            _ => unimplemented!("got {:?} event", event),
         }
     }
 }

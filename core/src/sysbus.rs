@@ -1,14 +1,15 @@
 use serde::{Deserialize, Serialize};
 
-use super::arm7tdmi;
-use super::arm7tdmi::memory::*;
+use super::arm7tdmi::memory::{
+    Addr, BusIO, DebugRead, MemoryAccess, MemoryAccessWidth, MemoryInterface,
+};
 use super::bios::Bios;
-use super::bus::*;
 use super::cartridge::Cartridge;
 use super::dma::DmaNotifer;
 use super::iodev::{IoDevices, WaitControl};
 use super::sched::*;
-use super::util::{Shared, WeakPointer};
+use arm7tdmi::{self, Arm7tdmiCore};
+use rustboyadvance_utils::{Shared, WeakPointer};
 
 pub mod consts {
     pub const WORK_RAM_SIZE: usize = 256 * 1024;
@@ -21,7 +22,8 @@ pub mod consts {
     pub const PALRAM_ADDR: u32 = 0x0500_0000;
     pub const VRAM_ADDR: u32 = 0x0600_0000;
     pub const OAM_ADDR: u32 = 0x0700_0000;
-    pub const GAMEPAK_WS0_LO: u32 = 0x0800_0000;
+    pub const CART_BASE: u32 = 0x0800_0000;
+    pub const GAMEPAK_WS0_LO: u32 = CART_BASE;
     pub const GAMEPAK_WS0_HI: u32 = 0x0900_0000;
     pub const GAMEPAK_WS1_LO: u32 = 0x0A00_0000;
     pub const GAMEPAK_WS1_HI: u32 = 0x0B00_0000;
@@ -145,11 +147,11 @@ impl CycleLookupTables {
 pub struct SysBus {
     pub io: Shared<IoDevices>,
     scheduler: Shared<Scheduler>,
-    arm_core: WeakPointer<arm7tdmi::Core<SysBus>>,
+    arm_core: WeakPointer<Arm7tdmiCore<SysBus>>,
 
-    bios: Bios,
-    ewram: Box<[u8]>,
-    iwram: Box<[u8]>,
+    pub(crate) bios: Bios,
+    pub(crate) ewram: Box<[u8]>,
+    pub(crate) iwram: Box<[u8]>,
     pub cartridge: Cartridge,
 
     cycle_luts: CycleLookupTables,
@@ -161,7 +163,8 @@ pub type SysBusPtr = WeakPointer<SysBus>;
 
 impl SchedulerConnect for SysBus {
     fn connect_scheduler(&mut self, scheduler: SharedScheduler) {
-        self.scheduler = scheduler;
+        self.scheduler = scheduler.clone();
+        self.io.connect_scheduler(scheduler.clone());
     }
 }
 
@@ -224,12 +227,12 @@ impl SysBus {
     }
 
     /// must be called whenever this object is instanciated
-    pub fn init(&mut self, arm_core: WeakPointer<arm7tdmi::Core<SysBus>>) {
+    pub fn init(&mut self, arm_core: WeakPointer<Arm7tdmiCore<SysBus>>) {
         self.arm_core = arm_core.clone();
-        self.bios.connect_arm_core(arm_core.clone());
+        self.bios.connect_arm_core(arm_core);
         let ptr = SysBusPtr::new(self as *mut SysBus);
         // HACK
-        self.io.set_sysbus_ptr(ptr.clone());
+        self.io.set_sysbus_ptr(ptr);
     }
 
     pub fn on_waitcnt_written(&mut self, waitcnt: WaitControl) {
@@ -267,10 +270,9 @@ impl SysBus {
     /// `addr` is considered to be an address of
     fn read_invalid(&mut self, addr: Addr) -> u32 {
         warn!("invalid read @{:08x}", addr);
-        use super::arm7tdmi::CpuState;
         let value = match self.arm_core.cpsr.state() {
-            CpuState::ARM => self.arm_core.get_prefetched_opcode(),
-            CpuState::THUMB => {
+            arm7tdmi::CpuState::ARM => self.arm_core.get_prefetched_opcode(),
+            arm7tdmi::CpuState::THUMB => {
                 // For THUMB code the result consists of two 16bit fragments and depends on the address area
                 // and alignment where the opcode was stored.
 
@@ -281,7 +283,7 @@ impl SysBus {
                 match (r15 >> 24) as usize {
                     PAGE_BIOS | PAGE_OAM => {
                         // TODO this is probably wrong, according to GBATEK, we should be using $+6 here but it isn't prefetched yet.
-                        value = value << 16;
+                        value <<= 16;
                         value |= decoded;
                     }
                     PAGE_IWRAM => {
@@ -291,7 +293,7 @@ impl SysBus {
                             value |= decoded << 16;
                         } else {
                             // LSW = OldLO, MSW = [$+4]   ;for opcodes at non-4-byte aligned locations
-                            value = value << 16;
+                            value <<= 16;
                             value |= decoded;
                         }
                     }
@@ -305,7 +307,7 @@ impl SysBus {
 }
 
 /// Todo - implement bound checks for EWRAM/IWRAM
-impl Bus for SysBus {
+impl BusIO for SysBus {
     #[inline]
     fn read_32(&mut self, addr: Addr) -> u32 {
         match addr & 0xff000000 {
